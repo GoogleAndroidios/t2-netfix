@@ -44,7 +44,9 @@ TARGET_USER="${SUDO_USER:-}"
 if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
     TARGET_USER="$(logname 2>/dev/null || true)"
 fi
-[ "$TARGET_USER" = "root" ] && TARGET_USER="" || true
+if [ "$TARGET_USER" = "root" ]; then
+    TARGET_USER=""
+fi
 
 TARGET_HOME=""
 if [ -n "$TARGET_USER" ]; then

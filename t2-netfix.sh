@@ -64,7 +64,9 @@ CONF="${T2_NETFIX_CONF:-/etc/t2-netfix.conf}"
 
 # ---------- configuration ----------
 # shellcheck disable=SC1090
-[ -r "$CONF" ] && . "$CONF" 2>/dev/null || true
+if [ -r "$CONF" ]; then
+    . "$CONF" 2>/dev/null || true
+fi
 
 : "${T2_MAX_ROUNDS:=3}"        # upper bound of reload rounds
 : "${T2_RECONNECT_MAX:=60}"    # seconds spent reconnecting input devices
@@ -179,8 +181,12 @@ write_state() {
 
 # ---------- Wi-Fi probing ----------
 wifi_if() {
-    local i
-    i=$(ls /sys/class/net 2>/dev/null | grep -E '^wl' | head -n1)
+    local p i=""
+    for p in /sys/class/net/wl*; do
+        [ -e "$p" ] || continue
+        i=${p##*/}
+        break
+    done
     if [ -z "$i" ] && command -v iw >/dev/null 2>&1; then
         i=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}')
     fi
@@ -256,7 +262,15 @@ wifi_text() {
 }
 
 # ---------- Bluetooth probing ----------
-bt_dev() { ls /sys/class/bluetooth 2>/dev/null | grep -E '^hci' | head -n1; }
+bt_dev() {
+    local p
+    for p in /sys/class/bluetooth/hci*; do
+        [ -e "$p" ] || continue
+        printf '%s' "${p##*/}"
+        break
+    done
+    return 0
+}
 
 bt_powered() {
     timeout 6 bluetoothctl show 2>/dev/null \
@@ -373,7 +387,7 @@ bt_conn_text() {
 # script never steals a link the user did not ask for.
 # Result goes to the global RECONNECTED.
 bt_reconnect_inputs() {
-    local m info conn icon name attempt
+    local m info icon name attempt
     local deadline=$((SECONDS + T2_RECONNECT_MAX))
     RECONNECTED=0
 
@@ -527,7 +541,9 @@ bt_pci_bdf() {
 reload_wifi() {
     local i
     i=$(wifi_if)
-    [ -n "$i" ] && ip link set "$i" down 2>/dev/null || true
+    if [ -n "$i" ]; then
+        ip link set "$i" down 2>/dev/null || true
+    fi
 
     modprobe -r brcmfmac_wcc 2>/dev/null || true
     modprobe -r brcmfmac 2>/dev/null || true
@@ -553,7 +569,9 @@ wifi_soft_reset() {
     sleep 1
     ip link set "$i" up 2>/dev/null || true
     sleep 2
-    command -v nmcli >/dev/null 2>&1 && nmcli device wifi rescan >/dev/null 2>&1 || true
+    if command -v nmcli >/dev/null 2>&1; then
+        nmcli device wifi rescan >/dev/null 2>&1 || true
+    fi
     WIFI_SCAN_CACHE=""
     sleep 2
     [ "$(wifi_probe)" = "ok" ]
@@ -565,14 +583,18 @@ wifi_hard_reset() {
     log "wifi chip unresponsive, resetting PCI function $bdf"
     progress "wifi fallback: PCI function reset ($bdf)"
 
-    [ -e "/sys/bus/pci/devices/$bdf/driver" ] \
-        && { echo "$bdf" > "$drv/unbind"; } 2>/dev/null || true
+    if [ -e "/sys/bus/pci/devices/$bdf/driver" ]; then
+        echo "$bdf" > "$drv/unbind" 2>/dev/null || true
+    fi
     modprobe -r brcmfmac_wcc 2>/dev/null || true
     modprobe -r brcmfmac 2>/dev/null || true
     sleep 1
-    [ -w "/sys/bus/pci/devices/$bdf/reset" ] \
-        && { echo 1 > "/sys/bus/pci/devices/$bdf/reset"; } 2>/dev/null \
-        || log "PCI reset write failed"
+    if [ -w "/sys/bus/pci/devices/$bdf/reset" ]; then
+        echo 1 > "/sys/bus/pci/devices/$bdf/reset" 2>/dev/null \
+            || log "PCI reset write failed"
+    else
+        log "PCI reset write failed"
+    fi
     sleep 2
     modprobe brcmfmac >/dev/null 2>&1 || log "warning: brcmfmac failed to load"
     sleep 2
@@ -638,8 +660,9 @@ bt_hard_reset() {
     progress "bluetooth fallback: PCI function reset ($bdf)"
 
     systemctl stop bluetooth 2>/dev/null || true
-    [ -e "/sys/bus/pci/devices/$bdf/driver" ] \
-        && { echo "$bdf" > "$drv/unbind"; } 2>/dev/null || true
+    if [ -e "/sys/bus/pci/devices/$bdf/driver" ]; then
+        echo "$bdf" > "$drv/unbind" 2>/dev/null || true
+    fi
     modprobe -r hci_bcm4377 2>/dev/null || true
     sleep 1
 
