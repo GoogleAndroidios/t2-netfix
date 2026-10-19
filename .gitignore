@@ -1,0 +1,12 @@
+# local test artefacts
+*.log
+*.bak
+*.orig
+*.rej
+/tmp/
+
+# editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*~

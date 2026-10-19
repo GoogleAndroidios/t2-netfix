@@ -1,0 +1,39 @@
+# /etc/t2-netfix.conf - settings for t2-netfix
+#
+# Every value below is optional: the line is commented out so the built-in
+# default applies. Uncomment and edit what you need, then run
+#   sudo t2-netfix --check
+# to confirm nothing broke.
+
+# How many reload rounds to try before falling back to a PCI reset.
+# Each round is: reload brcmfmac, then reload hci_bcm4377, then re-check.
+# The script stops early as soon as both are healthy.
+# T2_MAX_ROUNDS=3
+
+# Maximum number of seconds spent reconnecting paired keyboards and mice.
+# bluez needs roughly 10-20s after a driver reload before it accepts a new
+# connection, so do not set this too low.
+# T2_RECONNECT_MAX=60
+
+# Which paired devices are reconnected automatically, matched against the
+# bluetoothctl "Icon:" value. input-* covers keyboards, mice, trackpads and
+# game controllers. Headsets and phones are deliberately left alone.
+# T2_RECONNECT_ICONS='input-*'
+
+# How long the number of visible access points is cached, in seconds.
+# Only affects how often progress notifications rescan; raising it makes
+# notifications cheaper, lowering it makes the Wi-Fi verdict fresher.
+# T2_SCAN_CACHE_TTL=20
+
+# PCI vendor of the combo chip. 0x14e4 is Broadcom; you should not need to
+# change this.
+# T2_PCI_VENDOR=0x14e4
+
+# PCI device IDs of the Bluetooth function, used only when the driver is not
+# bound and the driver name is therefore unavailable.
+# T2_BT_PCI_IDS='0x5fa0|0x5f69|0x5f71|0x5f72'
+
+# Power the Bluetooth radio off before suspending, so the BCM4377 firmware
+# does not hang across the sleep cycle. Read by the suspend hook only.
+# Set to 0 to disable (e.g. if you want to wake the machine from Bluetooth).
+# T2_PRE_POWEROFF_BT=1
