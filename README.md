@@ -1,5 +1,10 @@
 # t2-netfix
 
+[![shellcheck](https://github.com/GoogleAndroidios/t2-netfix/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/GoogleAndroidios/t2-netfix/actions/workflows/shellcheck.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**English** | [简体中文](README.zh-CN.md)
+
 Restore Wi-Fi and Bluetooth on Apple T2 Macs after suspend/resume, on wake, or
 after logging back in — automatically, and without re-extracting firmware from
 your macOS partition.
@@ -181,6 +186,139 @@ Practical options, in order of convenience:
    `echo ADP1 | sudo tee /proc/acpi/wakeup` (not persistent, and the ACPI name
    differs per model).
 
+## Tested on
+
+Only one physical machine has been used so far. The table below is the complete
+environment it was developed and verified against — not a guess at what "should"
+work.
+
+| Item | Value |
+| --- | --- |
+| Model | `MacBookAir9,1` (MacBook Air 2020, Intel) |
+| SoC / CPU | Intel Core i3-1000NG4 (4 threads) |
+| Board | `Mac-0CFF9C7C2B63DF8D` |
+| iBridge firmware | `24.16.6005.0.0` |
+| Distro | Ubuntu 26.04.1 LTS |
+| Kernel | `7.2.11-3-t2-resolute` ([t2linux]) |
+| Session | GNOME Shell 50.1 on Wayland |
+| systemd | 259 (`259.5-0ubuntu3.4`) |
+| BlueZ | 5.85 (`5.85-4ubuntu0.4`) |
+| NetworkManager | 1.54.3 |
+| wpa_supplicant | 2.11 |
+| Wi-Fi function | `73:00.0` — BCM4377b, `14e4:4488` (rev 04) |
+| Bluetooth function | `73:00.1` — BRCM4377, `14e4:5fa0` (rev 04) |
+| Drivers | `brcmfmac`, `brcmfmac_wcc`, `hci_bcm4377` |
+| Firmware | `brcmfmac4377b3-pcie.apple,formosa.bin`, `brcmbt4377b3-apple,formosa.bin` |
+| Sleep mode | `deep` (S3); `s2idle` is available but not the default |
+
+### What was actually exercised
+
+- Wi-Fi and Bluetooth surviving a full **suspend → resume** cycle (`deep`), with
+  the hook repairing both before the desktop is usable.
+- **Desktop login** and **boot** triggers, including the `flock` serialisation
+  when more than one fires at once.
+- **Wi-Fi half-dead**: interface present, `iw` responsive, zero APs visible —
+  detected as `half` and repaired. This was the case that originally slipped
+  through a node-existence check.
+- **Bluetooth half-dead**: `hci0` present and `Powered: yes`, but `scan off`
+  failing and every scan timing out — detected as `broken` and repaired.
+- **`probe -110` hang**: the worst state, where `hci_bcm4377` fails to probe and
+  the controller node disappears entirely. Recovered several times with the PCI
+  function reset; this is why the escalation ladder exists.
+- Automatic **reconnection of a Bluetooth keyboard and mouse** after a driver
+  reload, including clearing bluez's stale `Discovering` flag.
+- **Notifications** from a root-owned service reaching the logged-in user's
+  session bus (`runuser` + `DBUS_SESSION_BUS_ADDRESS`), with live progress.
+- `--check`, `--status`, `--connect`, `--force`, `--quiet`, `--login` exit codes.
+
+### Other models
+
+Reports are welcome and genuinely useful. If you run this on another T2 model,
+open an issue with:
+
+```sh
+uname -a
+cat /sys/class/dmi/id/product_name
+lspci -nn | grep -i 14e4
+journalctl -t t2-netfix -n 50
+```
+
+## Limitations
+
+Read this before installing. These are real, measured constraints, not
+disclaimers.
+
+**Platform**
+
+- **Intel T2 only.** Apple Silicon Macs (M1 and later) have no T2 and no
+  `brcmfmac`/`hci_bcm4377` combo of this kind; this tool is irrelevant there.
+- **Broadcom combo chip only.** It targets BCM4377/4378 (`14e4:4488`,
+  `14e4:5fa0`). Machines with Intel, Qualcomm or MediaTek wireless are not
+  supported.
+- **The drivers must already work.** If `brcmfmac` or `hci_bcm4377` is missing,
+  or `/lib/firmware/brcm` lacks the matching `.bin`, no amount of reloading
+  helps — install the [t2linux] kernel and firmware packages first (this repo
+  never downloads or redistributes firmware).
+- **Verified on one machine.** MacBookPro 2018–2020, Mac mini 2018, iMac
+  2019–2020 and Mac Pro 2019 are *expected* to work because the chip and driver
+  stack are the same, but none of them has been tested. Treat a first install on
+  another model as experimental, and keep a terminal open.
+- **systemd only.** The triggers are a `systemd-sleep` hook plus two units.
+  OpenRC, runit and other init systems are not supported.
+
+**Suspend and wake**
+
+- **A Bluetooth keyboard or mouse cannot wake a suspended T2 Mac.** In `deep`
+  (S3) the radio is unpowered. This is a hardware property, not something this
+  tool can fix; see [Wake-up](#wake-up-what-can-actually-wake-the-machine).
+- **The default configuration powers Bluetooth off before sleeping**
+  (`T2_PRE_POWEROFF_BT=1`). That is deliberate: it avoids the firmware hang on
+  resume, but it also removes any chance of a BT wake. Setting it to `0` keeps
+  the radio alive and makes the `-110` hang more likely.
+- **`s2idle` is not tested.** The reference machine sleeps in `deep`. If you
+  force `s2idle` (`/sys/power/mem_sleep`), the chip is not reset the same way
+  and the repair ladder may behave differently.
+- **Hibernation (`disk`) is not supported or tested.** The hook only acts on
+  `pre`/`post` suspend.
+- **A cold boot that never enumerated the chip cannot be repaired.** If the PCI
+  device is absent at the firmware level, the script logs it and exits; only a
+  reboot helps.
+
+**Runtime behaviour**
+
+- **`--force` interrupts your network for a few seconds.** Driver reload means
+  the interface disappears. Existing SSH sessions over Wi-Fi will drop.
+- **Root is required**, and `install.sh` grants passwordless sudo for exactly
+  one file (`/etc/sudoers.d/t2-netfix` → `/usr/local/sbin/t2-netfix`). Anyone
+  who can edit that script can run arbitrary code as root. Review it before
+  installing; remove the sudoers file if you do not want the autostart triggers.
+- **Reconnection covers input devices only.** Devices whose `bluetoothctl`
+  `Icon` is `input-*` (keyboards, mice, gamepads) are reconnected; headsets,
+  speakers, phones and anything else are left untouched, so the script never
+  steals a link you did not ask for.
+- **Reconnection is best-effort within a 60 s budget.** After a reload, bluez
+  needs roughly 10–20 s before it accepts new connections; if a device is
+  powered off, out of range, or still holds a stale link, it will not connect
+  and the tool moves on rather than blocking login.
+- **The first seconds after login are a race.** `--login` waits up to 20 s for
+  the interface plus a short settle time; on a slow disk or with a heavy session
+  startup, a single run may still start too early. The resume service and the
+  boot service are the safety nets.
+- **No notifications from the boot-time run.** There is no desktop session at
+  boot, so boot repairs are journal-only. Use `--status` or
+  `journalctl -b -u t2-netfix.service` to see what happened.
+- **Repair is reactive, not preventive.** It fixes the chip after it breaks; it
+  does not stop the driver from breaking. `T2_PRE_POWEROFF_BT=1` reduces the
+  frequency but does not eliminate it.
+
+**Scope**
+
+- **No firmware extraction and no macOS access.** The tool deliberately never
+  mounts your APFS partition. If you previously used `get_from_macos` on an
+  encrypted volume, that may have written bad firmware — restoring a known-good
+  firmware package is a manual job this repo does not attempt.
+- **No telemetry, no network access.** The script never talks to the internet.
+
 ## Troubleshooting
 
 ```sh
@@ -204,6 +342,22 @@ journalctl -b -u t2-netfix-resume.service
 - **No notifications.** Notifications come from the desktop session; a boot-time
   run has no session to talk to. Log in and run
   `sudo t2-netfix --notify --force` to test the path.
+- **It reports `ok` but something is still wrong.** Run `--check` twice: the AP
+  count is cached for 20 s, and a scan issued immediately after resume can
+  legitimately return nothing while the radio settles.
+
+## Contributing
+
+Bug reports with logs are more valuable than patches here, because the failure
+modes are hardware-specific. Useful material:
+
+- `uname -a`, `cat /sys/class/dmi/id/product_name`, `lspci -nn | grep -i 14e4`
+- `journalctl -t t2-netfix -n 100`
+- `sudo t2-netfix --status` after the failure, and `t2-netfix --check`
+- What you did right before it broke (suspend, logout, `get_from_macos`, …)
+
+Please run `shellcheck t2-netfix.sh install.sh` before sending a patch; CI runs
+the same check.
 
 ## Uninstall
 
@@ -214,50 +368,14 @@ sudo ./install.sh --uninstall
 This removes the tool, both services, the hook, the sudoers file, the autostart
 entry and `/etc/t2-netfix.conf`.
 
-## Tested on
-
-| Machine | Distro | Kernel | Result |
-| --- | --- | --- | --- |
-| MacBookAir9,1 (2020, i3) | Ubuntu 26.04, GNOME/Wayland | 7.2.x-t2 | works: suspend/resume, login, `probe -110` recovery |
-
-Reports from other models are welcome — open an issue with `uname -a`, your
-model (`cat /sys/class/dmi/id/product_name`) and
-`journalctl -t t2-netfix -n 50`.
-
 ## Notes
 
 - Not affiliated with Apple. No firmware is modified or redistributed; the
   script only reloads drivers and resets PCI functions that are already there.
-- The suspend hook powers the Bluetooth radio off before sleeping. If you rely
-  on waking from a Bluetooth peripheral, set `T2_PRE_POWEROFF_BT=0`.
-- `t2-netfix --force` will briefly interrupt your network connection. That is
-  expected — it is reloading the driver.
-- The script needs root for `modprobe` and PCI sysfs writes; everything it does
-  is logged to the journal under the `t2-netfix` tag.
+- Everything the script does is logged to the journal under the `t2-netfix` tag.
+- `--status` reads the last run from `/run/t2-netfix.status`, so it resets on
+  reboot.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
----
-
-## 中文速览
-
-T2 芯片的 Intel Mac 上，Wi-Fi 和蓝牙是同一颗 Broadcom 芯片（BCM4377），
-睡眠唤醒或重新登录后驱动常常没能正确重新绑定，表现是：没有 Wi-Fi 网卡、
-有网卡但一个热点都搜不到、蓝牙节点在但点不亮或扫描超时、键鼠连不回来。
-
-这个工具做三件事：
-
-1. **功能性判断**，不看节点在不在——Wi-Fi 以"能不能扫到热点"为准，蓝牙以
-   "能不能启停扫描"为准。节点还在但已经卡死的状态不会被误判成正常。
-2. **由轻到重修复**：软复位（接口 down/up、重启 bluetoothd）→ 重载驱动 →
-   PCI 功能级复位。每轮结束实测，好了就停。
-3. **四个触发点全自动**：挂起唤醒、唤醒兜底服务、开机、桌面登录，并串行化避免
-   互相打架。
-
-安装：`sudo ./install.sh`，验证：`sudo t2-netfix --check`，卸载：
-`sudo ./install.sh --uninstall`。
-
-注意：**蓝牙键鼠无法唤醒挂起的机器**（S3 下射频断电）。外接显示器场景建议
-直接关掉合盖休眠、只让屏幕熄灭，按键即亮。
